@@ -205,7 +205,7 @@ public class BookService {
 
         // below code will make sure that If the book is late, we add the user owes to the payment repository and database so a user won't go to checkout another book until they pay off their fees.
         if(differenceInTime < 0) {
-            Payment payment = new Payment();
+            Payment payment = paymentRepository.findByUserEmail(userEmail);
 
             payment.setAmount(payment.getAmount() + (differenceInTime * -1));
             paymentRepository.save(payment);
