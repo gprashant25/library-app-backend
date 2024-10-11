@@ -3,9 +3,11 @@ package com.luv2code.spring_boot_library.service;
 import com.luv2code.spring_boot_library.dao.BookRepository;
 import com.luv2code.spring_boot_library.dao.CheckoutRepository;
 import com.luv2code.spring_boot_library.dao.HistoryRepository;
+import com.luv2code.spring_boot_library.dao.PaymentRepository;
 import com.luv2code.spring_boot_library.entity.Book;
 import com.luv2code.spring_boot_library.entity.Checkout;
 import com.luv2code.spring_boot_library.entity.History;
+import com.luv2code.spring_boot_library.entity.Payment;
 import com.luv2code.spring_boot_library.responsemodels.ShelfCurrentLoansResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,16 +26,18 @@ public class BookService {
 
     // below creating instance variable for using a constructor Dependency injection
     private BookRepository bookRepository;
-
     private CheckoutRepository checkoutRepository;
-
     private HistoryRepository historyRepository;
 
+    private PaymentRepository paymentRepository;
+
     // constructor dependency injection
-    public BookService(BookRepository bookRepository, CheckoutRepository checkoutRepository, HistoryRepository historyRepository){
+    public BookService(BookRepository bookRepository, CheckoutRepository checkoutRepository,
+                       HistoryRepository historyRepository, PaymentRepository paymentRepository){
         this.bookRepository = bookRepository;
         this.checkoutRepository = checkoutRepository;
         this.historyRepository = historyRepository;
+        this.paymentRepository = paymentRepository;
     }
 
     public Book checkoutBook(String userEmail, Long bookId) throws Exception{
@@ -44,9 +48,48 @@ public class BookService {
         // here below we're trying to validate that checkout == null bcos if its not null that means we found a book in the database where the userEmail and bookId matches
         Checkout validateCheckout = checkoutRepository.findByUserEmailAndBookId(userEmail, bookId);
 
-        if(!book.isPresent() || validateCheckout !=null || book.get().getCopiesAvailable() <=0){
+        if(!book.isPresent() || validateCheckout != null || book.get().getCopiesAvailable() <=0){
             throw new Exception("Book doesn't exist or already checked out by the user.");
         }
+
+        // Stripe Payment part: here we are going to validate that this user doesn't have any specific book that are late and that need to be returned and need to be paid for before we allow that user to checkout another book.
+        List<Checkout> currentBooksCheckedOut = checkoutRepository.findBooksByUserEmail(userEmail);
+
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+
+        boolean bookNeedsReturned = false;
+
+        for(Checkout checkout : currentBooksCheckedOut) {
+            Date d1 = sdf.parse(checkout.getReturnDate());
+            Date d2 = sdf.parse(LocalDate.now().toString());
+
+            TimeUnit time = TimeUnit.DAYS;
+
+            double differenceInTime = time.convert(d1.getTime() - d2.getTime(), TimeUnit.MILLISECONDS);
+
+            // below code will make sure that the user cannot or not allowed to checkout new book if the user has late book
+            if(differenceInTime < 0) {
+                bookNeedsReturned = true;
+                break;
+            }
+        }
+
+        Payment userPayment = paymentRepository.findByUserEmail(userEmail);
+
+        if((userPayment != null && userPayment.getAmount() > 0) || (userPayment != null && bookNeedsReturned)) {
+            throw new Exception("Outstanding fees");
+        }
+
+        // here if the user does not have a book that needs return, so bookNeedsReturned is false. However, if the userPayment is null bcos they dont have an item in the table. so we want to create a payment record in our database for that specific user
+        if( userPayment == null) {
+            Payment payment = new Payment();
+            payment.setAmount(00.00);
+            payment.setUserEmail(userEmail);
+
+            // saving the record into the database payment table
+            paymentRepository.save(payment);
+        }
+
 
         // here so out of all the available copies of this book, we just want to subtract one
         book.get().setCopiesAvailable(book.get().getCopiesAvailable() - 1);
@@ -149,6 +192,24 @@ public class BookService {
 
         book.get().setCopiesAvailable(book.get().getCopiesAvailable() + 1);
         bookRepository.save(book.get());     // saving the new book
+
+        // Stripe payment part: user has to pay some late fees money for late return book
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+
+        Date d1 = sdf.parse(validateCheckout.getReturnDate());
+        Date d2 = sdf.parse(LocalDate.now().toString());
+
+        TimeUnit time = TimeUnit.DAYS;
+
+        double differenceInTime = time.convert(d1.getTime() - d2.getTime(), TimeUnit.MILLISECONDS);
+
+        // below code will make sure that If the book is late, we add the user owes to the payment repository and database so a user won't go to checkout another book until they pay off their fees.
+        if(differenceInTime < 0) {
+            Payment payment = new Payment();
+
+            payment.setAmount(payment.getAmount() + (differenceInTime * -1));
+            paymentRepository.save(payment);
+        }
 
         // here we're deleting the checkedOut bookId from the Checkout database table
         checkoutRepository.deleteById(validateCheckout.getId());
