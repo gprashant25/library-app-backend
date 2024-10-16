@@ -70,12 +70,13 @@ public class BookService {
             // below code will make sure that the user cannot or not allowed to checkout new book if the user has late book
             if(differenceInTime < 0) {
                 bookNeedsReturned = true;
-                break;
+                break;     // using break statement will stop the execution of this for-loop only and other below piece of code gets implemented.
             }
         }
 
         Payment userPayment = paymentRepository.findByUserEmail(userEmail);
 
+        // if user's payment late fees amount is more than 0 and also the user has not returned the late book yet, then it will throw below exception.
         if((userPayment != null && userPayment.getAmount() > 0) || (userPayment != null && bookNeedsReturned)) {
             throw new Exception("Outstanding fees");
         }
